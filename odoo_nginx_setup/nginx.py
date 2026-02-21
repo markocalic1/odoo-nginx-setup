@@ -49,15 +49,26 @@ def render_acme_config(domain: str, webroot: str) -> str:
 """
 
 
-def render_https_config(domain: str, odoo_port: int, longpolling_port: int) -> str:
+def render_https_config(
+    domain: str,
+    odoo_port: int,
+    longpolling_port: int,
+    single_upstream: bool = False,
+    backend_host: str = "127.0.0.1",
+) -> str:
     up = _slug(domain)
-    return f"""upstream {up}_backend {{
-    server 127.0.0.1:{odoo_port};
-}}
-
+    lp_upstream = f"{up}_backend" if single_upstream else f"{up}_longpolling"
+    longpolling_block = ""
+    if not single_upstream:
+        longpolling_block = f"""
 upstream {up}_longpolling {{
-    server 127.0.0.1:{longpolling_port};
+    server {backend_host}:{longpolling_port};
 }}
+"""
+    return f"""upstream {up}_backend {{
+    server {backend_host}:{odoo_port};
+}}
+{longpolling_block}
 
 server {{
     listen 80;
@@ -91,11 +102,11 @@ server {{
     }}
 
     location /longpolling {{
-        proxy_pass http://{up}_longpolling;
+        proxy_pass http://{lp_upstream};
     }}
 
     location /websocket {{
-        proxy_pass http://{up}_longpolling;
+        proxy_pass http://{lp_upstream};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -154,12 +165,14 @@ def certbot_issue_hetzner_dns(domain: str, email: str, token: str, wildcard: boo
         raise RuntimeError("HETZNER_DNS_API_TOKEN is required for Hetzner DNS challenge")
 
     safe = _slug(domain)
-    token_path = f"/tmp/odoo_nginx_setup_hetzner_token_{safe}"
-    auth_path = f"/tmp/odoo_nginx_setup_hetzner_auth_{safe}.sh"
-    cleanup_path = f"/tmp/odoo_nginx_setup_hetzner_cleanup_{safe}.sh"
+    base_dir = "/etc/letsencrypt/odoo-nginx-setup"
+    token_path = f"{base_dir}/hetzner-token-{safe}"
+    auth_path = f"{base_dir}/hetzner-auth-{safe}.sh"
+    cleanup_path = f"{base_dir}/hetzner-cleanup-{safe}.sh"
+    _run(["mkdir", "-p", base_dir], sudo=True)
 
-    _write(token_path, token + "\n")
-    os.chmod(token_path, 0o600)
+    _write(token_path, token + "\n", sudo=True)
+    _run(["chmod", "600", token_path], sudo=True)
 
     auth_script = f"""#!/bin/bash
 set -euo pipefail
@@ -244,10 +257,9 @@ echo "$records" | jq -r --arg n "$record_name" --arg v "$CERTBOT_VALIDATION" '.r
 done
 """
 
-    _write(auth_path, auth_script)
-    _write(cleanup_path, cleanup_script)
-    os.chmod(auth_path, 0o700)
-    os.chmod(cleanup_path, 0o700)
+    _write(auth_path, auth_script, sudo=True)
+    _write(cleanup_path, cleanup_script, sudo=True)
+    _run(["chmod", "700", auth_path, cleanup_path], sudo=True)
 
     cmd = [
         "certbot",
@@ -270,3 +282,16 @@ done
     if wildcard:
         cmd.extend(["-d", f"*.{domain}"])
     _run(cmd, sudo=True)
+
+
+def ensure_certbot_auto_renewal() -> None:
+    deploy_hook_dir = "/etc/letsencrypt/renewal-hooks/deploy"
+    deploy_hook_path = f"{deploy_hook_dir}/odoo-nginx-setup-reload-nginx.sh"
+    hook = """#!/bin/bash
+set -euo pipefail
+systemctl reload nginx
+"""
+    _run(["mkdir", "-p", deploy_hook_dir], sudo=True)
+    _write(deploy_hook_path, hook, sudo=True)
+    _run(["chmod", "755", deploy_hook_path], sudo=True)
+    _run(["systemctl", "enable", "--now", "certbot.timer"], sudo=True)

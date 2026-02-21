@@ -5,7 +5,9 @@ Interactive CLI to configure Nginx + Let's Encrypt for an Odoo instance, with op
 ## Features
 - Detect Odoo systemd service and Odoo config path
 - Supports Docker/non-systemd mode via direct `--config`
+- Supports odoo-deploy profile config (`--odoo-deploy-config`) to auto-resolve `docker/etc/odoo.conf`
 - Detect Odoo `http_port` and `longpolling_port` / `gevent_port`
+- Supports Docker single-port mode (`--single-upstream`) for setups where only one Odoo port is exposed
 - Supports Let's Encrypt HTTP-01 and Hetzner DNS-01 challenge modes
 - Supports wildcard certificates (`*.example.com`) with Hetzner DNS-01
 - Interactive wizard for domain/email/provider
@@ -16,6 +18,7 @@ Interactive CLI to configure Nginx + Let's Encrypt for an Odoo instance, with op
   - HTTP ACME config
   - HTTPS reverse proxy config
 - Certbot certificate issuance
+- Enables certbot auto-renewal (`certbot.timer`) with nginx reload deploy hook
 - Ensures `proxy_mode = True` in Odoo config
 - Optional UFW hardening
 
@@ -54,6 +57,18 @@ odoo-nginx-setup init \
   --no-restart-service
 ```
 
+odoo-deploy profile example:
+```bash
+odoo-nginx-setup init \
+  --odoo-deploy-config /home/calic/profiles/mm19-dev/config.yaml \
+  --domain erp.example.com \
+  --email admin@example.com \
+  --provider none \
+  --ip-mode ipv4 \
+  --single-upstream \
+  --no-restart-service
+```
+
 Wildcard certificate example (Hetzner DNS):
 ```bash
 export HETZNER_DNS_API_TOKEN=...
@@ -67,6 +82,9 @@ odoo-nginx-setup init \
   --wildcard \
   --no-restart-service
 ```
+
+This configures persistent Hetzner DNS auth/cleanup hooks under `/etc/letsencrypt/odoo-nginx-setup/`
+so `certbot renew` can run unattended.
 
 ## DNS Tokens
 Cloudflare:

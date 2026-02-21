@@ -4,6 +4,9 @@ import argparse
 import os
 import socket
 import urllib.request
+from pathlib import Path
+
+import yaml
 
 from odoo_nginx_setup.detect import build_runtime, find_services
 from odoo_nginx_setup.dns.cloudflare import CloudflareClient
@@ -13,6 +16,7 @@ from odoo_nginx_setup.nginx import (
     certbot_issue_hetzner_dns,
     certbot_issue_http,
     enable_site,
+    ensure_certbot_auto_renewal,
     install_nginx_and_certbot,
     render_acme_config,
     render_https_config,
@@ -108,12 +112,36 @@ def _dns_setup(provider: str, domain: str, ip_mode: str) -> None:
     raise RuntimeError(f"Unknown DNS provider: {provider}")
 
 
+def _resolve_odoo_deploy_config(profile_config_path: str) -> str:
+    config_path = Path(profile_config_path).expanduser()
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Odoo-deploy profile config not found: {config_path}")
+
+    with config_path.open("r", encoding="utf-8") as f:
+        conf = yaml.safe_load(f) or {}
+
+    profile_name = conf.get("profile_name")
+    if not profile_name:
+        raise RuntimeError(f"Missing profile_name in {config_path}")
+
+    build_dir = conf.get("build_dir", f"~/odoo_deploy_data/{profile_name}")
+    odoo_conf = Path(build_dir).expanduser() / "docker" / "etc" / "odoo.conf"
+    if not odoo_conf.is_file():
+        raise FileNotFoundError(
+            f"Resolved odoo.conf not found: {odoo_conf}. "
+            "Generate it first with `odoodeploy odoo-build`."
+        )
+    return str(odoo_conf)
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     if args.wildcard and args.tls_challenge != "dns":
         raise RuntimeError("--wildcard requires --tls-challenge dns")
 
     service = _pick_service(args.service)
     config_path = args.config
+    if not config_path and args.odoo_deploy_config:
+        config_path = _resolve_odoo_deploy_config(args.odoo_deploy_config)
 
     if not service and not config_path:
         config_path = _ask("No Odoo services auto-detected. Enter path to Odoo config file")
@@ -160,8 +188,18 @@ def cmd_init(args: argparse.Namespace) -> None:
         certbot_issue_hetzner_dns(domain, email, token, wildcard=args.wildcard)
 
     print("Writing final HTTPS nginx config...")
-    write_site_config(site_path, render_https_config(domain, runtime.http_port, runtime.longpolling_port))
+    write_site_config(
+        site_path,
+        render_https_config(
+            domain,
+            runtime.http_port,
+            runtime.longpolling_port,
+            single_upstream=args.single_upstream,
+            backend_host=args.backend_host,
+        ),
+    )
     test_and_reload_nginx()
+    ensure_certbot_auto_renewal()
 
     changed = ensure_proxy_mode(runtime.config_file)
     if changed:
@@ -195,10 +233,24 @@ def build_parser() -> argparse.ArgumentParser:
     init = sub.add_parser("init", help="Interactive setup for one Odoo instance")
     init.add_argument("--service", help="Systemd service name (e.g. odoo19)")
     init.add_argument("--config", help="Path to Odoo config file (required if no service exists)")
+    init.add_argument(
+        "--odoo-deploy-config",
+        help="Path to odoo-deploy profile config.yaml. Auto-resolves docker/etc/odoo.conf",
+    )
     init.add_argument("--domain", help="Public domain for the instance")
     init.add_argument("--email", help="Email for Let's Encrypt")
     init.add_argument("--provider", choices=["none", "cloudflare", "hetzner"], help="DNS provider")
     init.add_argument("--ip-mode", choices=["ipv4", "ipv6", "dual"], help="DNS IP mode")
+    init.add_argument(
+        "--backend-host",
+        default="127.0.0.1",
+        help="Backend host for Odoo upstreams (default: 127.0.0.1)",
+    )
+    init.add_argument(
+        "--single-upstream",
+        action="store_true",
+        help="Use same backend upstream for / and /longpolling (useful when Docker exposes one port)",
+    )
     init.add_argument(
         "--tls-challenge",
         choices=["http", "dns"],
