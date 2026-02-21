@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo-nginx-setup"
+version = "0.1.0"
+description = "Interactive Odoo Nginx + SSL + DNS setup (Cloudflare/Hetzner)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.31.0",
+]
+
+[project.scripts]
+odoo-nginx-setup = "odoo_nginx_setup.cli:main"
+
+[tool.setuptools]
+packages = ["odoo_nginx_setup", "odoo_nginx_setup.dns"]
