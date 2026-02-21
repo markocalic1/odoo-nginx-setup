@@ -33,8 +33,25 @@ class HetznerDnsClient:
             return fqdn[: -len(suffix)]
         return fqdn
 
-    def upsert_record(self, zone_id: str, zone_name: str, rtype: str, fqdn: str, content: str) -> None:
+    def _rrset_exists(self, zone_name: str, name: str, rtype: str) -> bool:
+        r = requests.get(f"{API}/zones/{zone_name}/rrsets/{name}/{rtype}", headers=self.headers, timeout=20)
+        if r.status_code == 404:
+            return False
+        r.raise_for_status()
+        return True
+
+    def upsert_record(
+        self,
+        zone_id: str,
+        zone_name: str,
+        rtype: str,
+        fqdn: str,
+        content: str,
+        fail_if_exists: bool = False,
+    ) -> None:
         name = self._relative_name(fqdn, zone_name)
+        if fail_if_exists and self._rrset_exists(zone_name, name, rtype):
+            raise RuntimeError(f"DNS record already exists: {name} {rtype} in zone {zone_name}")
         # Ensure idempotency by deleting existing RRset before creating a new one.
         requests.delete(f"{API}/zones/{zone_name}/rrsets/{name}/{rtype}", headers=self.headers, timeout=20)
         payload = {"name": name, "type": rtype, "ttl": 120, "records": [{"value": content}]}

@@ -67,7 +67,7 @@ def _pick_service(cli_service: str | None) -> str | None:
     return services[0]
 
 
-def _dns_setup(provider: str, domain: str, ip_mode: str) -> None:
+def _dns_setup(provider: str, domain: str, ip_mode: str, create_only: bool = False) -> None:
     ipv4 = _public_ip(ipv6=False)
     ipv6 = _public_ip(ipv6=True)
 
@@ -103,9 +103,9 @@ def _dns_setup(provider: str, domain: str, ip_mode: str) -> None:
         hz = HetznerDnsClient(token)
         zone_id, zone_name = hz.find_zone(domain)
         if want_v4 and ipv4:
-            hz.upsert_record(zone_id, zone_name, "A", domain, ipv4)
+            hz.upsert_record(zone_id, zone_name, "A", domain, ipv4, fail_if_exists=create_only)
         if want_v6 and ipv6:
-            hz.upsert_record(zone_id, zone_name, "AAAA", domain, ipv6)
+            hz.upsert_record(zone_id, zone_name, "AAAA", domain, ipv6, fail_if_exists=create_only)
         print("Hetzner DNS records updated.")
         return
 
@@ -164,7 +164,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     install_nginx_and_certbot()
 
     print("Configuring DNS...")
-    _dns_setup(provider, domain, ip_mode)
+    _dns_setup(provider, domain, ip_mode, create_only=args.dns_create_only)
 
     webroot = f"/var/www/{domain}"
     os.makedirs(webroot, exist_ok=True)
@@ -241,6 +241,11 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--email", help="Email for Let's Encrypt")
     init.add_argument("--provider", choices=["none", "cloudflare", "hetzner"], help="DNS provider")
     init.add_argument("--ip-mode", choices=["ipv4", "ipv6", "dual"], help="DNS IP mode")
+    init.add_argument(
+        "--dns-create-only",
+        action="store_true",
+        help="Create DNS records only if missing; fail if an A/AAAA record already exists (Hetzner mode)",
+    )
     init.add_argument(
         "--backend-host",
         default="127.0.0.1",
