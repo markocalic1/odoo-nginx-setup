@@ -178,14 +178,14 @@ def certbot_issue_hetzner_dns(domain: str, email: str, token: str, wildcard: boo
 set -euo pipefail
 
 token="$(cat {token_path})"
-api="https://dns.hetzner.com/api/v1"
+api="https://api.hetzner.cloud/v1"
 fqdn="$CERTBOT_DOMAIN"
 
 find_zone() {{
   local candidate="$fqdn"
   while true; do
     local resp
-    resp="$(curl -sS -H "Auth-API-Token: $token" "$api/zones?name=$candidate")"
+    resp="$(curl -sS -H "Authorization: Bearer $token" "$api/zones?name=$candidate")"
     local zid
     zid="$(echo "$resp" | jq -r '.zones[0].id // empty')"
     if [ -n "$zid" ]; then
@@ -201,7 +201,6 @@ find_zone() {{
 }}
 
 zone_info="$(find_zone)"
-zone_id="${{zone_info%%|*}}"
 zone_name="${{zone_info##*|}}"
 
 record_name="_acme-challenge"
@@ -210,8 +209,8 @@ if [ "$fqdn" != "$zone_name" ]; then
   record_name="_acme-challenge.$host_part"
 fi
 
-payload="$(jq -cn --arg zid "$zone_id" --arg name "$record_name" --arg val "$CERTBOT_VALIDATION" '{{zone_id:$zid, type:"TXT", name:$name, value:$val, ttl:120}}')"
-curl -sS -X POST "$api/records" -H "Auth-API-Token: $token" -H "Content-Type: application/json" -d "$payload" >/dev/null
+payload="$(jq -cn --arg name "$record_name" --arg val "$CERTBOT_VALIDATION" '{{name:$name, type:"TXT", ttl:300, records:[{{value:("\\\"" + $val + "\\\"")}}]}}')"
+curl -sS -X POST "$api/zones/$zone_name/rrsets" -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d "$payload" >/dev/null
 sleep 20
 """
 
@@ -219,14 +218,14 @@ sleep 20
 set -euo pipefail
 
 token="$(cat {token_path})"
-api="https://dns.hetzner.com/api/v1"
+api="https://api.hetzner.cloud/v1"
 fqdn="$CERTBOT_DOMAIN"
 
 find_zone() {{
   local candidate="$fqdn"
   while true; do
     local resp
-    resp="$(curl -sS -H "Auth-API-Token: $token" "$api/zones?name=$candidate")"
+    resp="$(curl -sS -H "Authorization: Bearer $token" "$api/zones?name=$candidate")"
     local zid
     zid="$(echo "$resp" | jq -r '.zones[0].id // empty')"
     if [ -n "$zid" ]; then
@@ -241,7 +240,6 @@ find_zone() {{
 }}
 
 zone_info="$(find_zone)"
-zone_id="${{zone_info%%|*}}"
 zone_name="${{zone_info##*|}}"
 
 record_name="_acme-challenge"
@@ -250,11 +248,7 @@ if [ "$fqdn" != "$zone_name" ]; then
   record_name="_acme-challenge.$host_part"
 fi
 
-records="$(curl -sS -H "Auth-API-Token: $token" "$api/records?zone_id=$zone_id")"
-echo "$records" | jq -r --arg n "$record_name" --arg v "$CERTBOT_VALIDATION" '.records[] | select(.type=="TXT" and .name==$n and .value==$v) | .id' | while read -r rid; do
-  [ -n "$rid" ] || continue
-  curl -sS -X DELETE "$api/records/$rid" -H "Auth-API-Token: $token" >/dev/null
-done
+curl -sS -X DELETE "$api/zones/$zone_name/rrsets/$record_name/TXT" -H "Authorization: Bearer $token" >/dev/null
 """
 
     _write(auth_path, auth_script, sudo=True)

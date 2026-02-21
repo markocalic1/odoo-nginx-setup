@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import requests
 
-API = "https://dns.hetzner.com/api/v1"
+API = "https://api.hetzner.cloud/v1"
 
 
 class HetznerDnsClient:
     def __init__(self, token: str):
         self.headers = {
-            "Auth-API-Token": token,
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
 
@@ -22,7 +22,7 @@ class HetznerDnsClient:
             r.raise_for_status()
             zones = r.json().get("zones", [])
             if zones:
-                return zones[0]["id"], zone_name
+                return zone_name, zone_name
         raise RuntimeError(f"Could not find Hetzner DNS zone for {fqdn}")
 
     def _relative_name(self, fqdn: str, zone_name: str) -> str:
@@ -35,17 +35,8 @@ class HetznerDnsClient:
 
     def upsert_record(self, zone_id: str, zone_name: str, rtype: str, fqdn: str, content: str) -> None:
         name = self._relative_name(fqdn, zone_name)
-        r = requests.get(f"{API}/records", headers=self.headers, params={"zone_id": zone_id}, timeout=20)
-        r.raise_for_status()
-        records = r.json().get("records", [])
-
-        matches = [rec for rec in records if rec.get("type") == rtype and rec.get("name") == name]
-
-        payload = {"value": content, "ttl": 120, "type": rtype, "name": name, "zone_id": zone_id}
-        if matches:
-            rec_id = matches[0]["id"]
-            rr = requests.put(f"{API}/records/{rec_id}", headers=self.headers, json=payload, timeout=20)
-            rr.raise_for_status()
-        else:
-            rr = requests.post(f"{API}/records", headers=self.headers, json=payload, timeout=20)
-            rr.raise_for_status()
+        # Ensure idempotency by deleting existing RRset before creating a new one.
+        requests.delete(f"{API}/zones/{zone_name}/rrsets/{name}/{rtype}", headers=self.headers, timeout=20)
+        payload = {"name": name, "type": rtype, "ttl": 120, "records": [{"value": content}]}
+        rr = requests.post(f"{API}/zones/{zone_name}/rrsets", headers=self.headers, json=payload, timeout=20)
+        rr.raise_for_status()
